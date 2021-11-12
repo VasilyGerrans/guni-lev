@@ -152,27 +152,19 @@ contract GuniLev is IERC3156FlashBorrower {
 
     enum Action {WIND, UNWIND}
 
+    bytes32 public ilk;
     VatLike public immutable vat;
-    bytes32 public immutable ilk;
-    GemJoinLike public immutable join;
     DaiJoinLike public immutable daiJoin;
     SpotLike public immutable spotter;
-    GUNITokenLike public immutable guni;
     IERC20 public immutable dai;
-    IERC20 public immutable otherToken;
     IERC3156FlashLender public immutable lender;
-    CurveSwapLike public immutable curve;
     GUNIRouterLike public immutable router;
     GUNIResolverLike public immutable resolver;
-    int128 public immutable curveIndexDai;
-    int128 public immutable curveIndexOtherToken;
-    uint256 public immutable otherTokenTo18Conversion;
 
     constructor(
         GemJoinLike _join,
         DaiJoinLike _daiJoin,
         SpotLike _spotter,
-        IERC20 _otherToken,
         IERC3156FlashLender _lender,
         CurveSwapLike _curve,
         GUNIRouterLike _router,
@@ -180,23 +172,83 @@ contract GuniLev is IERC3156FlashBorrower {
         int128 _curveIndexDai,
         int128 _curveIndexOtherToken
     ) {
-        vat = VatLike(_join.vat());
+        require(_curve.coins(smallIntToUint(_curveIndexDai)) == address(_daiJoin.dai()), "GuniLev/constructor/incorrect-curve-info-dai");
+        
+        GUNITokenLike guni = GUNITokenLike(_join.gem());
+        IERC20 otherToken = guni.token0() != address(_daiJoin.dai()) ? IERC20(guni.token0()) : IERC20(guni.token1());
+        require(_curve.coins(smallIntToUint(_curveIndexOtherToken)) == address(otherToken), "GuniLev/constructor/incorrect-curve-info-otherToken");
+        
         ilk = _join.ilk();
-        join = _join;
+        vat = VatLike(_join.vat());
         daiJoin = _daiJoin;
         spotter = _spotter;
-        guni = GUNITokenLike(_join.gem());
         dai = IERC20(_daiJoin.dai());
-        otherToken = _otherToken;
         lender = _lender;
-        curve = _curve;
         router = _router;
         resolver = _resolver;
-        curveIndexDai = _curveIndexDai;
-        curveIndexOtherToken = _curveIndexOtherToken;
-        otherTokenTo18Conversion = 10 ** (18 - _otherToken.decimals());
+
+        poolWinderExists[ilk] = true;
+        poolWinders[ilk] = PoolWinder(
+            _join, 
+            otherToken, 
+            _curve, 
+            _curveIndexDai, 
+            _curveIndexOtherToken, 
+            10 ** (18 - otherToken.decimals()),
+            guni
+        );
+
+        VatLike(_join.vat()).hope(address(_daiJoin)); 
+    }
+
+    /// @notice Stores all data necessary to carry out a wind for a given LP.
+    struct PoolWinder { 
+        GemJoinLike join;
+        IERC20 otherToken;
+        CurveSwapLike curve;
+        int128 curveIndexDai;
+        int128 curveIndexOtherToken;
+        uint256 otherTokenTo18Conversion;
+        GUNITokenLike guni;
+    }
+
+    mapping(bytes32 => bool) private poolWinderExists;
+    mapping(bytes32 => PoolWinder) private poolWinders;
+
+    function setIlk(bytes32 _ilk) external {
+        require(poolWinderExists[_ilk] == true, "GuniLev/setIlk/ilk-pool-does-not-exist");
+        ilk = _ilk;
+    }
+
+    /// @notice Creates new or overwrites existing PoolWinder.
+    function setPool(GemJoinLike join, CurveSwapLike curve, int128 curveIndexDai, int128 curveIndexOtherToken) 
+    public returns (bool success) {
+        require(curve.coins(smallIntToUint(curveIndexDai)) == address(dai), "GuniLev/setPool/incorrect-curve-info-dai");
         
-        VatLike(_join.vat()).hope(address(_daiJoin));
+        GUNITokenLike guni = GUNITokenLike(join.gem());
+        IERC20 otherToken = guni.token0() != address(dai) ? IERC20(guni.token0()) : IERC20(guni.token1());
+        require(curve.coins(smallIntToUint(curveIndexOtherToken)) == address(otherToken), "GuniLev/setPool/incorrect-curve-info-otherToken");
+        
+        bytes32 newIlk = join.ilk();
+        poolWinderExists[newIlk] = true;
+        poolWinders[newIlk] = PoolWinder(
+            join, 
+            otherToken, 
+            curve, 
+            curveIndexDai, 
+            curveIndexOtherToken, 
+            10 ** (18 - otherToken.decimals()),
+            guni
+        );
+
+        return true;
+    }    
+
+    /// @notice Makes existing pool inaccessible.
+    function deletePool(bytes32 _ilk) external returns(bool success) {
+        require(poolWinderExists[_ilk] == true, "GuniLev/deletePool/pool-does-not-exist");
+        poolWinderExists[_ilk] = false;
+        return true;
     }
 
     function getWindEstimates(address usr, uint256 principal) public view returns (uint256 estimatedDaiRemaining, uint256 estimatedGuniAmount, uint256 estimatedDebt) {
@@ -208,6 +260,8 @@ contract GuniLev is IERC3156FlashBorrower {
 
         uint256 swapAmount;
         {
+            GUNITokenLike guni = poolWinders[ilk].guni;
+            uint256 otherTokenTo18Conversion = poolWinders[ilk].otherTokenTo18Conversion;
             (uint256 sqrtPriceX96,,,,,,) = UniPoolLike(guni.pool()).slot0();
             (, swapAmount) = resolver.getRebalanceParams(
                 address(guni),
@@ -217,21 +271,37 @@ contract GuniLev is IERC3156FlashBorrower {
             );
         }
 
-        uint256 daiBalance;
-        {
-            (,, estimatedGuniAmount) = guni.getMintAmounts(guni.token0() == address(dai) ? leveragedAmount - swapAmount : curve.get_dy(curveIndexDai, curveIndexOtherToken, swapAmount), guni.token1() == address(otherToken) ? curve.get_dy(curveIndexDai, curveIndexOtherToken, swapAmount) : leveragedAmount - swapAmount);
-            (,uint256 rate, uint256 spot,,) = vat.ilks(ilk);
-            (uint256 ink, uint256 art) = vat.urns(ilk, usr);
-            estimatedDebt = ((estimatedGuniAmount + ink) * spot / rate - art) * rate / RAY;
-            daiBalance = dai.balanceOf(usr);
-        }
+        (estimatedGuniAmount, estimatedDebt) = getGuniAmountAndDebt(usr, leveragedAmount, swapAmount);
+
+        uint256 daiBalance = dai.balanceOf(usr);
 
         require(leveragedAmount <= estimatedDebt + daiBalance, "not-enough-dai");
 
         estimatedDaiRemaining = estimatedDebt + daiBalance - leveragedAmount;
     }
 
+    function getGuniAmountAndDebt(address usr, uint256 leveragedAmount, uint256 swapAmount) internal view returns (uint256 estimatedGuniAmount, uint256 estimatedDebt) {
+        GUNITokenLike guni = poolWinders[ilk].guni;
+        CurveSwapLike curve = poolWinders[ilk].curve;
+        int128 curveIndexDai = poolWinders[ilk].curveIndexDai;
+        int128 curveIndexOtherToken = poolWinders[ilk].curveIndexOtherToken;
+
+        {
+            (,, estimatedGuniAmount) = guni.getMintAmounts(
+                guni.token0() == address(dai) ? leveragedAmount - swapAmount : curve.get_dy(curveIndexDai, curveIndexOtherToken, swapAmount), 
+                guni.token1() == address(dai) ? leveragedAmount - swapAmount : curve.get_dy(curveIndexDai, curveIndexOtherToken, swapAmount));
+            (,uint256 rate, uint256 spot,,) = vat.ilks(ilk);
+            (uint256 ink, uint256 art) = vat.urns(ilk, usr);
+            estimatedDebt = ((estimatedGuniAmount + ink) * spot / rate - art) * rate / RAY;
+        }
+    }
+
     function getUnwindEstimates(uint256 ink, uint256 art) public view returns (uint256 estimatedDaiRemaining) {
+        GUNITokenLike guni = poolWinders[ilk].guni;
+        CurveSwapLike curve = poolWinders[ilk].curve;
+        int128 curveIndexOtherToken = poolWinders[ilk].curveIndexOtherToken;
+        int128 curveIndexDai = poolWinders[ilk].curveIndexDai;
+
         (,uint256 rate,,,) = vat.ilks(ilk);
         (uint256 bal0, uint256 bal1) = guni.getUnderlyingBalances();
         uint256 totalSupply = guni.totalSupply();
@@ -250,6 +320,20 @@ contract GuniLev is IERC3156FlashBorrower {
     function getLeverageBPS() external view returns (uint256) {
         (,uint256 mat) = spotter.ilks(ilk);
         return 10000 * RAY/(mat - RAY);
+    }
+
+    /// @notice A hack workaround for converting int128 to uint256. This issue is introduced
+    /// by curve.exchange and curve.coins functions that accept int128 and uint256 respectively.
+    /// This shouldn't introduce major gas costs so long as the Curve pool has few coins
+    /// in the pool (which it typically does). It should also never throw an error, as curve
+    /// coin indexes are always positive.
+    function smallIntToUint(int128 valInitial) internal pure returns (uint256) {
+        require(valInitial >= 0, "GuniLev/smallIntToUint/unexpected-int128-value");
+        uint256 valFinal;
+        for (int128 index = 0; index < valInitial; index++) {
+            valFinal++;
+        }
+        return valFinal;
     }
 
     function getEstimatedCostToWindUnwind(address usr, uint256 principal) external view returns (uint256) {
@@ -309,9 +393,16 @@ contract GuniLev is IERC3156FlashBorrower {
     }
 
     function _wind(address usr, uint256 totalOwed, uint256 minWalletDai) internal {
+        CurveSwapLike curve = poolWinders[ilk].curve;
+        int128 curveIndexDai = poolWinders[ilk].curveIndexDai;
+        int128 curveIndexOtherToken = poolWinders[ilk].curveIndexOtherToken;
+        IERC20 otherToken = poolWinders[ilk].otherToken;
+
         // Calculate how much DAI we should be swapping for otherToken
         uint256 swapAmount;
         {
+            GUNITokenLike guni = poolWinders[ilk].guni;
+            uint256 otherTokenTo18Conversion = poolWinders[ilk].otherTokenTo18Conversion;
             (uint256 sqrtPriceX96,,,,,,) = UniPoolLike(guni.pool()).slot0();
             (, swapAmount) = resolver.getRebalanceParams(
                 address(guni),
@@ -325,28 +416,7 @@ contract GuniLev is IERC3156FlashBorrower {
         dai.approve(address(curve), swapAmount);
         curve.exchange(curveIndexDai, curveIndexOtherToken, swapAmount, 0);
 
-        // Mint G-UNI
-        uint256 guniBalance;
-        {
-            uint256 bal0 = IERC20(guni.token0()).balanceOf(address(this));
-            uint256 bal1 = IERC20(guni.token1()).balanceOf(address(this));
-            dai.approve(address(router), bal0);
-            otherToken.approve(address(router), bal1);
-            (,, guniBalance) = router.addLiquidity(address(guni), bal0, bal1, 0, 0, address(this));
-            dai.approve(address(router), 0);
-            otherToken.approve(address(router), 0);
-        }
-
-        // Open / Re-enforce vault
-        {
-            guni.approve(address(join), guniBalance);
-            join.join(address(usr), guniBalance);
-            (,uint256 rate, uint256 spot,,) = vat.ilks(ilk);
-            (uint256 ink, uint256 art) = vat.urns(ilk, usr);
-            uint256 dart = (guniBalance + ink) * spot / rate - art;
-            vat.frob(ilk, address(usr), address(usr), address(this), int256(guniBalance), int256(dart));
-            daiJoin.exit(address(this), vat.dai(address(this)) / RAY);
-        }
+        _guniAndVaultLogic(usr);
 
         uint256 daiBalance = dai.balanceOf(address(this));
         if (daiBalance > totalOwed) {
@@ -363,17 +433,44 @@ contract GuniLev is IERC3156FlashBorrower {
         require(dai.balanceOf(address(usr)) + otherToken.balanceOf(address(this)) >= minWalletDai, "slippage");
     }
 
-    function _unwind(address usr, uint256 amount, uint256 fee, uint256 minWalletDai) internal {
-        // Pay back all CDP debt and exit g-uni
-        (uint256 ink, uint256 art) = vat.urns(ilk, usr);
-        dai.approve(address(daiJoin), amount);
-        daiJoin.join(address(this), amount);
-        vat.frob(ilk, address(usr), address(this), address(this), -int256(ink), -int256(art));
-        join.exit(address(this), ink);
+    /// @dev Separated to escape the 'stack too deep' error
+    function _guniAndVaultLogic(address usr) internal {
+        GUNITokenLike guni = poolWinders[ilk].guni;
+        IERC20 otherToken = poolWinders[ilk].otherToken;
+        GemJoinLike join = poolWinders[ilk].join;
 
-        // Burn G-UNI
-        guni.approve(address(router), ink);
-        router.removeLiquidity(address(guni), ink, 0, 0, address(this));
+        // Mint G-UNI
+        uint256 guniBalance;
+        {
+            uint256 bal0 = IERC20(guni.token0()).balanceOf(address(this));
+            uint256 bal1 = IERC20(guni.token1()).balanceOf(address(this));
+            dai.approve(address(router), bal0);
+            otherToken.approve(address(router), bal1);
+            (,, guniBalance) = router.addLiquidity(address(guni), bal0, bal1, 0, 0, address(this));
+            dai.approve(address(router), 0);
+            otherToken.approve(address(router), 0);
+        }
+
+        // Open / Re-enforce vault
+        {
+            guni.approve(address(join), guniBalance);
+            join.join(address(usr), guniBalance); 
+            (,uint256 rate, uint256 spot,,) = vat.ilks(ilk);
+            (uint256 ink, uint256 art) = vat.urns(ilk, usr);
+            uint256 dart = (guniBalance + ink) * spot / rate - art;
+            vat.frob(ilk, address(usr), address(usr), address(this), int256(guniBalance), int256(dart)); 
+            daiJoin.exit(address(this), vat.dai(address(this)) / RAY);
+        }
+    }
+
+    function _unwind(address usr, uint256 amount, uint256 fee, uint256 minWalletDai) internal {
+        CurveSwapLike curve = poolWinders[ilk].curve;
+        int128 curveIndexDai = poolWinders[ilk].curveIndexDai;
+        int128 curveIndexOtherToken = poolWinders[ilk].curveIndexOtherToken;
+        IERC20 otherToken = poolWinders[ilk].otherToken;
+        
+        // Pay back all CDP debt and exit g-uni
+        _paybackDebtAndExitGuni(usr, amount);
 
         // Trade all otherToken for dai
         uint256 swapAmount = otherToken.balanceOf(address(this));
@@ -396,4 +493,19 @@ contract GuniLev is IERC3156FlashBorrower {
         require(dai.balanceOf(address(usr)) + otherToken.balanceOf(address(this)) >= minWalletDai, "slippage");
     }
 
+    /// @dev Separated to escape the 'stack too deep' error
+    function _paybackDebtAndExitGuni(address usr, uint256 amount) internal {
+        GUNITokenLike guni = poolWinders[ilk].guni;
+        GemJoinLike join = poolWinders[ilk].join;
+
+        (uint256 ink, uint256 art) = vat.urns(ilk, usr);
+        dai.approve(address(daiJoin), amount);
+        daiJoin.join(address(this), amount);
+        vat.frob(ilk, address(usr), address(this), address(this), -int256(ink), -int256(art));
+        join.exit(address(this), ink);
+
+        // Burn G-UNI
+        guni.approve(address(router), ink);
+        router.removeLiquidity(address(guni), ink, 0, 0, address(this));
+    }
 }
