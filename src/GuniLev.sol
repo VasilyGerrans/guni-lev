@@ -470,7 +470,7 @@ contract GuniLev is IERC3156FlashBorrower {
         IERC20 otherToken = poolWinders[ilk].otherToken;
         
         // Pay back all CDP debt and exit g-uni
-        _paybackDebtAndExitGuni(usr, amount);
+        _payBackDebtAndExitGuni(usr, amount);
 
         // Trade all otherToken for dai
         uint256 swapAmount = otherToken.balanceOf(address(this));
@@ -494,7 +494,7 @@ contract GuniLev is IERC3156FlashBorrower {
     }
 
     /// @dev Separated to escape the 'stack too deep' error
-    function _paybackDebtAndExitGuni(address usr, uint256 amount) internal {
+    function _payBackDebtAndExitGuni(address usr, uint256 amount) internal {
         GUNITokenLike guni = poolWinders[ilk].guni;
         GemJoinLike join = poolWinders[ilk].join;
 
