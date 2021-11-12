@@ -39,26 +39,6 @@ contract GuniLevTest is DSTest {
     GuniLev public lev;
 
     function setUp() public {
-        /*
-            If more G-Uni pools get accepted on Maker, we should be able to pass
-            in some values to the contract and gain instant access to the exact same 
-            wind/unwind procedure as we did with DAI/USDC.
-
-            In a new setup, we would have to input:
-
-            1. GemJoin address (for the new pair)
-
-            This GemJoin will then return a new ilk (collateral bytes32 id for Maker) 
-            and gem (Sorbet Finance DAI-otherToken pair address) which we can pass to 
-            our stored ilk and guni respectively. This would mean that these latter 
-            two caregories will have to be altered too.
-
-            2. otherToken address
-
-            3. New CurveSwap address, together with its curveIndexDai and curveIndexOtherToken
-
-            Pip is only used for tests, so we can leave it out for now.
-        */
         hevm = Hevm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
 
         vat = VatLike(0x35D1b3F3D7966A1DFe207aa4514C12a259A0492B);
@@ -75,7 +55,7 @@ contract GuniLevTest is DSTest {
         router = GUNIRouterLike(0x14E6D67F824C3a7b4329d3228807f8654294e4bd);
         resolver = GUNIResolverLike(0x0317650Af6f184344D7368AC8bB0bEbA5EDB214a);
 
-        lev = new GuniLev(join, daiJoin, spotter, /* otherToken, */ lender, curve, router, resolver, 0, 1);
+        lev = new GuniLev(join, daiJoin, spotter, lender, curve, router, resolver, 0, 1);
 
         // Give read access to Oracle
         giveAuthAccess(address(pip), address(this));
@@ -178,7 +158,6 @@ contract GuniLevTest is DSTest {
         assertTrue(relCostBPS < 800);
     }
 
-    /*
     function test_getWindEstimates() public {
         (uint256 expectedRemainingDai,,) = lev.getWindEstimates(address(this), dai.balanceOf(address(this)));
 
@@ -250,5 +229,4 @@ contract GuniLevTest is DSTest {
         assertEq(art, 0);
         assertEqApprox(dai.balanceOf(address(this)), principal, 500);      // Amount you get back should be approximately the same as the initial investment (minus some slippage/fees)
     }
-    */
 }
