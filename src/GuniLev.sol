@@ -152,7 +152,7 @@ contract GuniLev is IERC3156FlashBorrower {
 
     enum Action {WIND, UNWIND}
 
-    bytes32 public ilk;
+    // bytes32 public ilk;
     VatLike public immutable vat;
     DaiJoinLike public immutable daiJoin;
     SpotLike public immutable spotter;
@@ -178,7 +178,8 @@ contract GuniLev is IERC3156FlashBorrower {
         IERC20 otherToken = guni.token0() != address(_daiJoin.dai()) ? IERC20(guni.token0()) : IERC20(guni.token1());
         require(_curve.coins(smallIntToUint(_curveIndexOtherToken)) == address(otherToken), "GuniLev/constructor/incorrect-curve-info-otherToken");
         
-        ilk = _join.ilk();
+        // ilk = _join.ilk();
+        userIlks[msg.sender] = _join.ilk();
         vat = VatLike(_join.vat());
         daiJoin = _daiJoin;
         spotter = _spotter;
@@ -187,8 +188,8 @@ contract GuniLev is IERC3156FlashBorrower {
         router = _router;
         resolver = _resolver;
 
-        poolWinderExists[ilk] = true;
-        poolWinders[ilk] = PoolWinder(
+        poolWinderExists[_join.ilk()] = true;
+        poolWinders[_join.ilk()] = PoolWinder(
             _join, 
             otherToken, 
             _curve, 
@@ -199,6 +200,13 @@ contract GuniLev is IERC3156FlashBorrower {
         );
 
         VatLike(_join.vat()).hope(address(_daiJoin)); 
+    }
+
+    mapping(address => bytes32) public userIlks;
+
+    /// @dev Helps reduce variable numbers per function.
+    function _userIlk() internal view returns(bytes32) {
+        return userIlks[msg.sender];
     }
 
     /// @notice Stores all data necessary to carry out a wind for a given LP.
@@ -217,7 +225,7 @@ contract GuniLev is IERC3156FlashBorrower {
 
     function setIlk(bytes32 _ilk) external {
         require(poolWinderExists[_ilk] == true, "GuniLev/setIlk/ilk-pool-does-not-exist");
-        ilk = _ilk;
+        userIlks[msg.sender] = _ilk;
     }
 
     /// @notice Creates new or overwrites existing PoolWinder.
@@ -254,14 +262,14 @@ contract GuniLev is IERC3156FlashBorrower {
     function getWindEstimates(address usr, uint256 principal) public view returns (uint256 estimatedDaiRemaining, uint256 estimatedGuniAmount, uint256 estimatedDebt) {
         uint256 leveragedAmount;
         {
-            (,uint256 mat) = spotter.ilks(ilk);
+            (,uint256 mat) = spotter.ilks(_userIlk());
             leveragedAmount = principal*RAY/(mat - RAY);
         }
 
         uint256 swapAmount;
         {
-            GUNITokenLike guni = poolWinders[ilk].guni;
-            uint256 otherTokenTo18Conversion = poolWinders[ilk].otherTokenTo18Conversion;
+            GUNITokenLike guni = poolWinders[_userIlk()].guni;
+            uint256 otherTokenTo18Conversion = poolWinders[_userIlk()].otherTokenTo18Conversion;
             (uint256 sqrtPriceX96,,,,,,) = UniPoolLike(guni.pool()).slot0();
             (, swapAmount) = resolver.getRebalanceParams(
                 address(guni),
@@ -281,28 +289,28 @@ contract GuniLev is IERC3156FlashBorrower {
     }
 
     function getGuniAmountAndDebt(address usr, uint256 leveragedAmount, uint256 swapAmount) internal view returns (uint256 estimatedGuniAmount, uint256 estimatedDebt) {
-        GUNITokenLike guni = poolWinders[ilk].guni;
-        CurveSwapLike curve = poolWinders[ilk].curve;
-        int128 curveIndexDai = poolWinders[ilk].curveIndexDai;
-        int128 curveIndexOtherToken = poolWinders[ilk].curveIndexOtherToken;
+        GUNITokenLike guni = poolWinders[_userIlk()].guni;
+        CurveSwapLike curve = poolWinders[_userIlk()].curve;
+        int128 curveIndexDai = poolWinders[_userIlk()].curveIndexDai;
+        int128 curveIndexOtherToken = poolWinders[_userIlk()].curveIndexOtherToken;
 
         {
             (,, estimatedGuniAmount) = guni.getMintAmounts(
                 guni.token0() == address(dai) ? leveragedAmount - swapAmount : curve.get_dy(curveIndexDai, curveIndexOtherToken, swapAmount), 
                 guni.token1() == address(dai) ? leveragedAmount - swapAmount : curve.get_dy(curveIndexDai, curveIndexOtherToken, swapAmount));
-            (,uint256 rate, uint256 spot,,) = vat.ilks(ilk);
-            (uint256 ink, uint256 art) = vat.urns(ilk, usr);
+            (,uint256 rate, uint256 spot,,) = vat.ilks(_userIlk());
+            (uint256 ink, uint256 art) = vat.urns(_userIlk(), usr);
             estimatedDebt = ((estimatedGuniAmount + ink) * spot / rate - art) * rate / RAY;
         }
     }
 
     function getUnwindEstimates(uint256 ink, uint256 art) public view returns (uint256 estimatedDaiRemaining) {
-        GUNITokenLike guni = poolWinders[ilk].guni;
-        CurveSwapLike curve = poolWinders[ilk].curve;
-        int128 curveIndexOtherToken = poolWinders[ilk].curveIndexOtherToken;
-        int128 curveIndexDai = poolWinders[ilk].curveIndexDai;
+        GUNITokenLike guni = poolWinders[_userIlk()].guni;
+        CurveSwapLike curve = poolWinders[_userIlk()].curve;
+        int128 curveIndexOtherToken = poolWinders[_userIlk()].curveIndexOtherToken;
+        int128 curveIndexDai = poolWinders[_userIlk()].curveIndexDai;
 
-        (,uint256 rate,,,) = vat.ilks(ilk);
+        (,uint256 rate,,,) = vat.ilks(_userIlk());
         (uint256 bal0, uint256 bal1) = guni.getUnderlyingBalances();
         uint256 totalSupply = guni.totalSupply();
         bal0 = bal0 * ink / totalSupply;
@@ -313,12 +321,12 @@ contract GuniLev is IERC3156FlashBorrower {
     }
 
     function getUnwindEstimates(address usr) external view returns (uint256 estimatedDaiRemaining) {
-        (uint256 ink, uint256 art) = vat.urns(ilk, usr);
+        (uint256 ink, uint256 art) = vat.urns(_userIlk(), usr);
         return getUnwindEstimates(ink, art);
     }
 
     function getLeverageBPS() external view returns (uint256) {
-        (,uint256 mat) = spotter.ilks(ilk);
+        (,uint256 mat) = spotter.ilks(_userIlk());
         return 10000 * RAY/(mat - RAY);
     }
 
@@ -338,7 +346,7 @@ contract GuniLev is IERC3156FlashBorrower {
 
     function getEstimatedCostToWindUnwind(address usr, uint256 principal) external view returns (uint256) {
         (, uint256 estimatedGuniAmount, uint256 estimatedDebt) = getWindEstimates(usr, principal);
-        (,uint256 rate,,,) = vat.ilks(ilk);
+        (,uint256 rate,,,) = vat.ilks(_userIlk());
         return dai.balanceOf(usr) - getUnwindEstimates(estimatedGuniAmount, estimatedDebt * RAY / rate);
     }
 
@@ -347,7 +355,7 @@ contract GuniLev is IERC3156FlashBorrower {
         uint256 minWalletDai
     ) external {
         bytes memory data = abi.encode(Action.WIND, msg.sender, minWalletDai);
-        (,uint256 mat) = spotter.ilks(ilk);
+        (,uint256 mat) = spotter.ilks(_userIlk());
         initFlashLoan(data, principal*RAY/(mat - RAY));
     }
 
@@ -355,8 +363,8 @@ contract GuniLev is IERC3156FlashBorrower {
         uint256 minWalletDai
     ) external {
         bytes memory data = abi.encode(Action.UNWIND, msg.sender, minWalletDai);
-        (,uint256 rate,,,) = vat.ilks(ilk);
-        (, uint256 art) = vat.urns(ilk, msg.sender);
+        (,uint256 rate,,,) = vat.ilks(_userIlk());
+        (, uint256 art) = vat.urns(_userIlk(), msg.sender);
         initFlashLoan(data, art*rate/RAY);
     }
 
@@ -393,16 +401,16 @@ contract GuniLev is IERC3156FlashBorrower {
     }
 
     function _wind(address usr, uint256 totalOwed, uint256 minWalletDai) internal {
-        CurveSwapLike curve = poolWinders[ilk].curve;
-        int128 curveIndexDai = poolWinders[ilk].curveIndexDai;
-        int128 curveIndexOtherToken = poolWinders[ilk].curveIndexOtherToken;
-        IERC20 otherToken = poolWinders[ilk].otherToken;
+        CurveSwapLike curve = poolWinders[_userIlk()].curve;
+        int128 curveIndexDai = poolWinders[_userIlk()].curveIndexDai;
+        int128 curveIndexOtherToken = poolWinders[_userIlk()].curveIndexOtherToken;
+        IERC20 otherToken = poolWinders[_userIlk()].otherToken;
 
         // Calculate how much DAI we should be swapping for otherToken
         uint256 swapAmount;
         {
-            GUNITokenLike guni = poolWinders[ilk].guni;
-            uint256 otherTokenTo18Conversion = poolWinders[ilk].otherTokenTo18Conversion;
+            GUNITokenLike guni = poolWinders[_userIlk()].guni;
+            uint256 otherTokenTo18Conversion = poolWinders[_userIlk()].otherTokenTo18Conversion;
             (uint256 sqrtPriceX96,,,,,,) = UniPoolLike(guni.pool()).slot0();
             (, swapAmount) = resolver.getRebalanceParams(
                 address(guni),
@@ -435,9 +443,9 @@ contract GuniLev is IERC3156FlashBorrower {
 
     /// @dev Separated to escape the 'stack too deep' error
     function _guniAndVaultLogic(address usr) internal {
-        GUNITokenLike guni = poolWinders[ilk].guni;
-        IERC20 otherToken = poolWinders[ilk].otherToken;
-        GemJoinLike join = poolWinders[ilk].join;
+        GUNITokenLike guni = poolWinders[_userIlk()].guni;
+        IERC20 otherToken = poolWinders[_userIlk()].otherToken;
+        GemJoinLike join = poolWinders[_userIlk()].join;
 
         // Mint G-UNI
         uint256 guniBalance;
@@ -455,19 +463,19 @@ contract GuniLev is IERC3156FlashBorrower {
         {
             guni.approve(address(join), guniBalance);
             join.join(address(usr), guniBalance); 
-            (,uint256 rate, uint256 spot,,) = vat.ilks(ilk);
-            (uint256 ink, uint256 art) = vat.urns(ilk, usr);
+            (,uint256 rate, uint256 spot,,) = vat.ilks(_userIlk());
+            (uint256 ink, uint256 art) = vat.urns(_userIlk(), usr);
             uint256 dart = (guniBalance + ink) * spot / rate - art;
-            vat.frob(ilk, address(usr), address(usr), address(this), int256(guniBalance), int256(dart)); 
+            vat.frob(_userIlk(), address(usr), address(usr), address(this), int256(guniBalance), int256(dart)); 
             daiJoin.exit(address(this), vat.dai(address(this)) / RAY);
         }
     }
 
     function _unwind(address usr, uint256 amount, uint256 fee, uint256 minWalletDai) internal {
-        CurveSwapLike curve = poolWinders[ilk].curve;
-        int128 curveIndexDai = poolWinders[ilk].curveIndexDai;
-        int128 curveIndexOtherToken = poolWinders[ilk].curveIndexOtherToken;
-        IERC20 otherToken = poolWinders[ilk].otherToken;
+        CurveSwapLike curve = poolWinders[_userIlk()].curve;
+        int128 curveIndexDai = poolWinders[_userIlk()].curveIndexDai;
+        int128 curveIndexOtherToken = poolWinders[_userIlk()].curveIndexOtherToken;
+        IERC20 otherToken = poolWinders[_userIlk()].otherToken;
         
         // Pay back all CDP debt and exit g-uni
         _payBackDebtAndExitGuni(usr, amount);
@@ -495,13 +503,13 @@ contract GuniLev is IERC3156FlashBorrower {
 
     /// @dev Separated to escape the 'stack too deep' error
     function _payBackDebtAndExitGuni(address usr, uint256 amount) internal {
-        GUNITokenLike guni = poolWinders[ilk].guni;
-        GemJoinLike join = poolWinders[ilk].join;
+        GUNITokenLike guni = poolWinders[_userIlk()].guni;
+        GemJoinLike join = poolWinders[_userIlk()].join;
 
-        (uint256 ink, uint256 art) = vat.urns(ilk, usr);
+        (uint256 ink, uint256 art) = vat.urns(_userIlk(), usr);
         dai.approve(address(daiJoin), amount);
         daiJoin.join(address(this), amount);
-        vat.frob(ilk, address(usr), address(this), address(this), -int256(ink), -int256(art));
+        vat.frob(_userIlk(), address(usr), address(this), address(this), -int256(ink), -int256(art));
         join.exit(address(this), ink);
 
         // Burn G-UNI

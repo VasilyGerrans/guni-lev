@@ -164,11 +164,6 @@ contract GuniLevTest is DSTest {
         assertEqApprox(expectedRemainingDai, 2122 * 1e18, 500);
     }
 
-    function test_getSwapAmount() public {
-        uint256 swapAmount = lev._getSwapAmount();
-
-        assertEq(swapAmount, 1337);
-    }
     function test_getUnwindEstimates() public {
         uint256 startingAmount = dai.balanceOf(address(this));
 
