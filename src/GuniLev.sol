@@ -152,7 +152,6 @@ contract GuniLev is IERC3156FlashBorrower {
 
     enum Action {WIND, UNWIND}
 
-    // bytes32 public ilk;
     VatLike public immutable vat;
     DaiJoinLike public immutable daiJoin;
     SpotLike public immutable spotter;
@@ -178,7 +177,6 @@ contract GuniLev is IERC3156FlashBorrower {
         IERC20 otherToken = guni.token0() != address(_daiJoin.dai()) ? IERC20(guni.token0()) : IERC20(guni.token1());
         require(_curve.coins(smallIntToUint(_curveIndexOtherToken)) == address(otherToken), "GuniLev/constructor/incorrect-curve-info-otherToken");
         
-        // ilk = _join.ilk();
         userIlks[msg.sender] = _join.ilk();
         vat = VatLike(_join.vat());
         daiJoin = _daiJoin;
@@ -207,6 +205,11 @@ contract GuniLev is IERC3156FlashBorrower {
     /// @dev Helps reduce variable numbers per function.
     function _userIlk() internal view returns(bytes32) {
         return userIlks[msg.sender];
+    }
+
+    modifier validIlkCheck() {
+        require(poolWinderExists[_userIlk()] == true, "GuniLev/validIlkCheck/user-does-not-have-valid-ilk");
+        _;
     }
 
     /// @notice Stores all data necessary to carry out a wind for a given LP.
@@ -259,7 +262,7 @@ contract GuniLev is IERC3156FlashBorrower {
         return true;
     }
 
-    function getWindEstimates(address usr, uint256 principal) public view returns (uint256 estimatedDaiRemaining, uint256 estimatedGuniAmount, uint256 estimatedDebt) {
+    function getWindEstimates(address usr, uint256 principal) public view validIlkCheck() returns (uint256 estimatedDaiRemaining, uint256 estimatedGuniAmount, uint256 estimatedDebt) {
         uint256 leveragedAmount;
         {
             (,uint256 mat) = spotter.ilks(_userIlk());
@@ -288,7 +291,7 @@ contract GuniLev is IERC3156FlashBorrower {
         estimatedDaiRemaining = estimatedDebt + daiBalance - leveragedAmount;
     }
 
-    function getGuniAmountAndDebt(address usr, uint256 leveragedAmount, uint256 swapAmount) internal view returns (uint256 estimatedGuniAmount, uint256 estimatedDebt) {
+    function getGuniAmountAndDebt(address usr, uint256 leveragedAmount, uint256 swapAmount) internal view validIlkCheck() returns (uint256 estimatedGuniAmount, uint256 estimatedDebt) {
         GUNITokenLike guni = poolWinders[_userIlk()].guni;
         CurveSwapLike curve = poolWinders[_userIlk()].curve;
         int128 curveIndexDai = poolWinders[_userIlk()].curveIndexDai;
@@ -304,7 +307,7 @@ contract GuniLev is IERC3156FlashBorrower {
         }
     }
 
-    function getUnwindEstimates(uint256 ink, uint256 art) public view returns (uint256 estimatedDaiRemaining) {
+    function getUnwindEstimates(uint256 ink, uint256 art) public view validIlkCheck() returns (uint256 estimatedDaiRemaining) {
         GUNITokenLike guni = poolWinders[_userIlk()].guni;
         CurveSwapLike curve = poolWinders[_userIlk()].curve;
         int128 curveIndexOtherToken = poolWinders[_userIlk()].curveIndexOtherToken;
@@ -320,7 +323,7 @@ contract GuniLev is IERC3156FlashBorrower {
         return (guni.token0() == address(dai) ? bal0 : bal1) + dy - art * rate / RAY;
     }
 
-    function getUnwindEstimates(address usr) external view returns (uint256 estimatedDaiRemaining) {
+    function getUnwindEstimates(address usr) external view validIlkCheck() returns (uint256 estimatedDaiRemaining) {
         (uint256 ink, uint256 art) = vat.urns(_userIlk(), usr);
         return getUnwindEstimates(ink, art);
     }
@@ -344,7 +347,7 @@ contract GuniLev is IERC3156FlashBorrower {
         return valFinal;
     }
 
-    function getEstimatedCostToWindUnwind(address usr, uint256 principal) external view returns (uint256) {
+    function getEstimatedCostToWindUnwind(address usr, uint256 principal) external view validIlkCheck() returns (uint256) {
         (, uint256 estimatedGuniAmount, uint256 estimatedDebt) = getWindEstimates(usr, principal);
         (,uint256 rate,,,) = vat.ilks(_userIlk());
         return dai.balanceOf(usr) - getUnwindEstimates(estimatedGuniAmount, estimatedDebt * RAY / rate);
@@ -353,7 +356,7 @@ contract GuniLev is IERC3156FlashBorrower {
     function wind(
         uint256 principal,
         uint256 minWalletDai
-    ) external {
+    ) external validIlkCheck() {
         bytes memory data = abi.encode(Action.WIND, msg.sender, minWalletDai);
         (,uint256 mat) = spotter.ilks(_userIlk());
         initFlashLoan(data, principal*RAY/(mat - RAY));
@@ -361,7 +364,7 @@ contract GuniLev is IERC3156FlashBorrower {
 
     function unwind(
         uint256 minWalletDai
-    ) external {
+    ) external validIlkCheck() {
         bytes memory data = abi.encode(Action.UNWIND, msg.sender, minWalletDai);
         (,uint256 rate,,,) = vat.ilks(_userIlk());
         (, uint256 art) = vat.urns(_userIlk(), msg.sender);
