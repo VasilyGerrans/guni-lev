@@ -4,6 +4,7 @@ pragma solidity ^0.8.6;
 import "ds-test/test.sol";
 
 import "./GuniLev.sol";
+import "./GuniLevProxy.sol";
 
 interface Hevm {
     function warp(uint256) external;
@@ -37,6 +38,8 @@ contract GuniLevTest is DSTest {
     GUNIRouterLike public router;
     GUNIResolverLike public resolver;
     GuniLev public lev;
+    GuniLevProxy public proxy;
+    GuniLev public wrappedProxy;
 
     function setUp() public {
         hevm = Hevm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
@@ -55,7 +58,10 @@ contract GuniLevTest is DSTest {
         router = GUNIRouterLike(0x14E6D67F824C3a7b4329d3228807f8654294e4bd);
         resolver = GUNIResolverLike(0x0317650Af6f184344D7368AC8bB0bEbA5EDB214a);
 
-        lev = new GuniLev(join, daiJoin, spotter, lender, curve, router, resolver, 0, 1);
+        lev = new GuniLev();
+        lev.initialize();
+        proxy = new GuniLevProxy(address(lev), join, daiJoin, spotter, lender, router, resolver, curve, 0, 1);
+        wrappedProxy = GuniLev(address(proxy));
 
         // Give read access to Oracle
         giveAuthAccess(address(pip), address(this));
@@ -65,6 +71,8 @@ contract GuniLevTest is DSTest {
         giveTokens(address(dai), 50_000 * 1e18);
         vat.hope(address(lev));
         dai.approve(address(lev), type(uint256).max);
+        vat.hope(address(wrappedProxy));
+        dai.approve(address(wrappedProxy), type(uint256).max);
     }
 
     function assertEqApprox(uint256 _a, uint256 _b, uint256 _tolerance) internal {
@@ -149,6 +157,23 @@ contract GuniLevTest is DSTest {
         assertTrue(false);
     }
 
+    function test_proxy_estimatedCost() public {
+        uint256 bal = dai.balanceOf(address(this));
+        uint256 cost = wrappedProxy.getEstimatedCostToWindUnwind(address(this), bal);
+        uint256 relCostBPS = uint256(cost) * 10000 / bal;
+
+        // Expect up to 8% in losses due to slippage
+        assertTrue(relCostBPS < 800); 
+    }
+
+    function test_proxy_delete_create_pool() public {
+        bytes32 myIlk = wrappedProxy.userIlks(address(this));
+        bool successDelete = proxy.deletePool(myIlk);
+
+        assertTrue(successDelete);
+    }
+    
+    /*
     function test_estimatedCost() public {
         uint256 bal = dai.balanceOf(address(this));
         uint256 cost = lev.getEstimatedCostToWindUnwind(address(this), bal);
@@ -224,4 +249,5 @@ contract GuniLevTest is DSTest {
         assertEq(art, 0);
         assertEqApprox(dai.balanceOf(address(this)), principal, 500);      // Amount you get back should be approximately the same as the initial investment (minus some slippage/fees)
     }
+    */
 }
