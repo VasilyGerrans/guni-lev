@@ -175,13 +175,7 @@ contract GuniLev is Proxiable, Initializable, IERC3156FlashBorrower {
     mapping(bytes32 => bool) public poolWinderExists;
     mapping(bytes32 => PoolWinder) public poolWinders;
 
-    function getPoolWinderGuni(bytes32 ilk) external view returns (uint256) {
-        GUNITokenLike guni = poolWinders[ilk].guni;
-        (uint256 sqrtPriceX96,,,,,,) = UniPoolLike(guni.pool()).slot0();
-        return sqrtPriceX96;
-    }
-
-    mapping(address => bytes32) public userIlks;
+    mapping(address => bytes32) internal userIlks;
 
     /// @dev Helps reduce variables per function.
     function _userIlk() internal view returns(bytes32) {

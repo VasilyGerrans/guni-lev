@@ -166,17 +166,16 @@ contract GuniLevTest is DSTest {
         assertTrue(relCostBPS < 800); 
     }
 
-    function test_proxy_delete_create_pool() public {
-        bytes32 myIlk = wrappedProxy.userIlks(address(this));
-        bool successDelete = proxy.deletePool(myIlk);
-
-        assertTrue(successDelete);
-    }
-
     function testFail_set_nonexistent_ilk() public {
         bytes32 nonexistentIlk = bytes32(0);
         proxy.setIlk(nonexistentIlk);
     } 
+
+    function test_get_ilk() public {
+        bytes32 _ilk = proxy.getIlk();
+
+        assertTrue(_ilk != bytes32(0));
+    }
     
     function test_getUnwindEstimates() public {
         uint256 startingAmount = dai.balanceOf(address(this));

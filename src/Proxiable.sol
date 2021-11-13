@@ -3,7 +3,7 @@ pragma solidity ^0.8.6;
 
 import "./Ownable.sol";
 
-/// @notice Designed to prevent logic address storage collisions between GuniLev.sol
+/// @notice Precaution to prevent logic address storage collisions between GuniLev.sol
 /// and GuniLevProxy.sol. All implementation contracts must inherit from this.
 contract Proxiable is Ownable {
     address public levLogic;

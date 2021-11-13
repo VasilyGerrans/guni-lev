@@ -33,7 +33,7 @@ contract GuniLevProxy is Proxiable, Proxy {
 
     /// @notice Introduced to make sure each user is always certain
     /// what ilk he is interacting with.
-    mapping(address => bytes32) public userIlks;
+    mapping(address => bytes32) internal userIlks;
     
     /// @dev Helps reduce variables per function.
     function _userIlk() internal view returns(bytes32) {
@@ -65,6 +65,10 @@ contract GuniLevProxy is Proxiable, Proxy {
         setIlk(_join.ilk());
         setLevLogic(_lev);
         VatLike(_join.vat()).hope(address(_daiJoin));
+    }
+
+    function getIlk() external view returns(bytes32) {
+        return _userIlk();
     }
 
     function setIlk(bytes32 _ilk) public returns(bool) {
