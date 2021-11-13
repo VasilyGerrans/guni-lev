@@ -172,82 +172,79 @@ contract GuniLevTest is DSTest {
 
         assertTrue(successDelete);
     }
+
+    function testFail_set_nonexistent_ilk() public {
+        bytes32 nonexistentIlk = bytes32(0);
+        proxy.setIlk(nonexistentIlk);
+    } 
     
-    /*
-    function test_estimatedCost() public {
-        uint256 bal = dai.balanceOf(address(this));
-        uint256 cost = lev.getEstimatedCostToWindUnwind(address(this), bal);
-        uint256 relCostBPS = uint256(cost) * 10000 / bal;
-
-        // Expect up to 8% in losses due to slippage
-        assertTrue(relCostBPS < 800);
-    }
-
-    function test_getWindEstimates() public {
-        (uint256 expectedRemainingDai,,) = lev.getWindEstimates(address(this), dai.balanceOf(address(this)));
-
-        assertEqApprox(expectedRemainingDai, 2122 * 1e18, 500);
-    }
-
     function test_getUnwindEstimates() public {
         uint256 startingAmount = dai.balanceOf(address(this));
 
         // Need to wind up a vault first
-        lev.wind(startingAmount, 0);
+        wrappedProxy.wind(startingAmount, 0);
 
-        uint256 daiAfterUnwind = lev.getUnwindEstimates(address(this));
+        uint256 daiAfterUnwind = wrappedProxy.getUnwindEstimates(address(this));
 
         // Should be roughly the same as what you started with around 8% expected losses from slippage
         assertEqApprox(daiAfterUnwind, startingAmount, 800);
     }
+    
+    /// @notice Fails, but is very close to the correct answer,
+    /// just like the original GuniLev contract. The failure depends on
+    /// curve.
+    function test_proxy_getWindEstimates() public {
+        (uint256 expectedRemainingDai,,) = wrappedProxy.getWindEstimates(address(this), dai.balanceOf(address(this)));
 
+        assertEqApprox(expectedRemainingDai, 2122 * 1e18, 500);
+    }    
 
-    function test_open_position() public {
+    function test_proxy_open_position() public {
         uint256 principal = dai.balanceOf(address(this));
-        uint256 leveragedAmount = principal * lev.getLeverageBPS()/10000;
+        uint256 leveragedAmount = principal * wrappedProxy.getLeverageBPS()/10000;
 
-        lev.wind(dai.balanceOf(address(this)), 0);
+        wrappedProxy.wind(dai.balanceOf(address(this)), 0);
 
         // Should never be leftovers
-        assertEq(dai.balanceOf(address(lev)), 0);
+        assertEq(dai.balanceOf(address(wrappedProxy)), 0);
         assertEq(otherToken.balanceOf(address(lev)), 0);
-        assertEq(guni.balanceOf(address(lev)), 0);
+        assertEq(guni.balanceOf(address(wrappedProxy)), 0);
 
         // Should never be leftover approvals
-        assertEq(dai.allowance(address(lev), address(lender)), 0);
-        assertEq(dai.allowance(address(lev), address(curve)), 0);
-        assertEq(dai.allowance(address(lev), address(router)), 0);
-        assertEq(otherToken.allowance(address(lev), address(router)), 0);
-        assertEq(guni.allowance(address(lev), address(join)), 0);
+        assertEq(dai.allowance(address(wrappedProxy), address(lender)), 0);
+        assertEq(dai.allowance(address(wrappedProxy), address(curve)), 0);
+        assertEq(dai.allowance(address(wrappedProxy), address(router)), 0);
+        assertEq(otherToken.allowance(address(wrappedProxy), address(router)), 0);
+        assertEq(guni.allowance(address(wrappedProxy), address(join)), 0);
 
         // Should have a position open worth roughly 20x the original investment
          (,uint256 rate,,,) = vat.ilks(ilk);
         (uint256 ink, uint256 art) = vat.urns(ilk, address(this));
         assertEqApprox(ink * pip.read() / 1e18, leveragedAmount, 100);
-        assertEqApprox(art * rate / 1e27, leveragedAmount * (lev.getLeverageBPS() - 10000) / lev.getLeverageBPS(), 100);
+        assertEqApprox(art * rate / 1e27, leveragedAmount * (wrappedProxy.getLeverageBPS() - 10000) / wrappedProxy.getLeverageBPS(), 100);
     }
 
-    function test_open_close_position() public {
+    function test_proxy_open_close_position() public {
         uint256 principal = dai.balanceOf(address(this));
 
-        lev.wind(dai.balanceOf(address(this)), 0);
-        lev.unwind(0);
+        wrappedProxy.wind(dai.balanceOf(address(this)), 0);
+        wrappedProxy.unwind(0);
 
         // Should never be leftovers
-        assertEq(dai.balanceOf(address(lev)), 0);
-        assertEq(otherToken.balanceOf(address(lev)), 0);
-        assertEq(guni.balanceOf(address(lev)), 0);
+        assertEq(dai.balanceOf(address(wrappedProxy)), 0);
+        assertEq(otherToken.balanceOf(address(wrappedProxy)), 0);
+        assertEq(guni.balanceOf(address(wrappedProxy)), 0);
 
         // Should never be leftover approvals
-        assertEq(dai.allowance(address(lev), address(daiJoin)), 0);
-        assertEq(otherToken.allowance(address(lev), address(curve)), 0);
-        assertEq(guni.allowance(address(lev), address(router)), 0);
+        assertEq(dai.allowance(address(wrappedProxy), address(daiJoin)), 0);
+        assertEq(otherToken.allowance(address(wrappedProxy), address(curve)), 0);
+        assertEq(guni.allowance(address(wrappedProxy), address(router)), 0);
 
         // Position should be completely closed out
         (uint256 ink, uint256 art) = vat.urns(ilk, address(this));
         assertEq(ink, 0);
         assertEq(art, 0);
         assertEqApprox(dai.balanceOf(address(this)), principal, 500);      // Amount you get back should be approximately the same as the initial investment (minus some slippage/fees)
-    }
-    */
+    } 
+
 }

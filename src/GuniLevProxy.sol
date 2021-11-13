@@ -15,6 +15,8 @@ contract GuniLevProxy is Proxiable, Proxy {
     GUNIRouterLike public router;
     GUNIResolverLike public resolver;
 
+    bool private allowLenderCall;
+
     /// @notice Stores all data necessary to carry out a wind for a given LP.
     struct PoolWinder { 
         GemJoinLike join;
@@ -26,14 +28,14 @@ contract GuniLevProxy is Proxiable, Proxy {
         GUNITokenLike guni;
     }
 
-    mapping(bytes32 => bool) private poolWinderExists;
-    mapping(bytes32 => PoolWinder) private poolWinders;
+    mapping(bytes32 => bool) public poolWinderExists;
+    mapping(bytes32 => PoolWinder) public poolWinders;
 
-    /// @notice Introduce to make sure each user is always certain
+    /// @notice Introduced to make sure each user is always certain
     /// what ilk he is interacting with.
     mapping(address => bytes32) public userIlks;
     
-    /// @dev Helps reduce variable numbers per function.
+    /// @dev Helps reduce variables per function.
     function _userIlk() internal view returns(bytes32) {
         return userIlks[msg.sender];
     }
@@ -121,6 +123,8 @@ contract GuniLevProxy is Proxiable, Proxy {
     }
 
     function _beforeFallback() internal view override {
-        require(poolWinderExists[_userIlk()] == true, "GuniLevProxy/validIlkCheck/user-does-not-have-valid-ilk");
+        if (allowLenderCall == false || msg.sender != address(lender)) {
+            require(poolWinderExists[_userIlk()] == true, "GuniLevProxy/_beforeFallback/not-lender-or-no-valid-ilk");
+        }
     }
 }

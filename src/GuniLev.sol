@@ -160,6 +160,8 @@ contract GuniLev is Proxiable, Initializable, IERC3156FlashBorrower {
     GUNIRouterLike public router;
     GUNIResolverLike public resolver;
 
+    bool private allowLenderCall;
+
     struct PoolWinder { 
         GemJoinLike join;
         IERC20 otherToken;
@@ -170,12 +172,18 @@ contract GuniLev is Proxiable, Initializable, IERC3156FlashBorrower {
         GUNITokenLike guni;
     }
 
-    mapping(bytes32 => bool) private poolWinderExists;
-    mapping(bytes32 => PoolWinder) private poolWinders;
+    mapping(bytes32 => bool) public poolWinderExists;
+    mapping(bytes32 => PoolWinder) public poolWinders;
+
+    function getPoolWinderGuni(bytes32 ilk) external view returns (uint256) {
+        GUNITokenLike guni = poolWinders[ilk].guni;
+        (uint256 sqrtPriceX96,,,,,,) = UniPoolLike(guni.pool()).slot0();
+        return sqrtPriceX96;
+    }
 
     mapping(address => bytes32) public userIlks;
 
-    /// @dev Helps reduce variable numbers per function.
+    /// @dev Helps reduce variables per function.
     function _userIlk() internal view returns(bytes32) {
         return userIlks[msg.sender];
     }
@@ -288,6 +296,7 @@ contract GuniLev is Proxiable, Initializable, IERC3156FlashBorrower {
         uint256 _fee = lender.flashFee(address(dai), amount);
         uint256 _repayment = amount + _fee;
         dai.approve(address(lender), _allowance + _repayment);
+        allowLenderCall = true;
         lender.flashLoan(this, address(dai), amount, data);
     }
 
@@ -312,20 +321,23 @@ contract GuniLev is Proxiable, Initializable, IERC3156FlashBorrower {
         } else if (action == Action.UNWIND) {
             _unwind(usr, amount, fee, minWalletDai);
         }
+        allowLenderCall = false;
         return keccak256("ERC3156FlashBorrower.onFlashLoan");
     }
 
     function _wind(address usr, uint256 totalOwed, uint256 minWalletDai) internal {
-        CurveSwapLike curve = poolWinders[_userIlk()].curve;
-        int128 curveIndexDai = poolWinders[_userIlk()].curveIndexDai;
-        int128 curveIndexOtherToken = poolWinders[_userIlk()].curveIndexOtherToken;
-        IERC20 otherToken = poolWinders[_userIlk()].otherToken;
+        bytes32 callerIlk = userIlks[usr];
+
+        CurveSwapLike curve = poolWinders[callerIlk].curve;
+        int128 curveIndexDai = poolWinders[callerIlk].curveIndexDai;
+        int128 curveIndexOtherToken = poolWinders[callerIlk].curveIndexOtherToken;
+        IERC20 otherToken = poolWinders[callerIlk].otherToken;
 
         // Calculate how much DAI we should be swapping for otherToken
         uint256 swapAmount;
         {
-            GUNITokenLike guni = poolWinders[_userIlk()].guni;
-            uint256 otherTokenTo18Conversion = poolWinders[_userIlk()].otherTokenTo18Conversion;
+            GUNITokenLike guni = poolWinders[callerIlk].guni;
+            uint256 otherTokenTo18Conversion = poolWinders[callerIlk].otherTokenTo18Conversion;
             (uint256 sqrtPriceX96,,,,,,) = UniPoolLike(guni.pool()).slot0();
             (, swapAmount) = resolver.getRebalanceParams(
                 address(guni),
@@ -358,9 +370,11 @@ contract GuniLev is Proxiable, Initializable, IERC3156FlashBorrower {
 
     /// @dev Separated to escape the 'stack too deep' error
     function _guniAndVaultLogic(address usr) internal {
-        GUNITokenLike guni = poolWinders[_userIlk()].guni;
-        IERC20 otherToken = poolWinders[_userIlk()].otherToken;
-        GemJoinLike join = poolWinders[_userIlk()].join;
+        bytes32 callerIlk = userIlks[usr];
+
+        GUNITokenLike guni = poolWinders[callerIlk].guni;
+        IERC20 otherToken = poolWinders[callerIlk].otherToken;
+        GemJoinLike join = poolWinders[callerIlk].join;
 
         // Mint G-UNI
         uint256 guniBalance;
@@ -378,19 +392,21 @@ contract GuniLev is Proxiable, Initializable, IERC3156FlashBorrower {
         {
             guni.approve(address(join), guniBalance);
             join.join(address(usr), guniBalance); 
-            (,uint256 rate, uint256 spot,,) = vat.ilks(_userIlk());
-            (uint256 ink, uint256 art) = vat.urns(_userIlk(), usr);
+            (,uint256 rate, uint256 spot,,) = vat.ilks(callerIlk);
+            (uint256 ink, uint256 art) = vat.urns(callerIlk, usr);
             uint256 dart = (guniBalance + ink) * spot / rate - art;
-            vat.frob(_userIlk(), address(usr), address(usr), address(this), int256(guniBalance), int256(dart)); 
+            vat.frob(callerIlk, address(usr), address(usr), address(this), int256(guniBalance), int256(dart)); 
             daiJoin.exit(address(this), vat.dai(address(this)) / RAY);
         }
     }
 
     function _unwind(address usr, uint256 amount, uint256 fee, uint256 minWalletDai) internal {
-        CurveSwapLike curve = poolWinders[_userIlk()].curve;
-        int128 curveIndexDai = poolWinders[_userIlk()].curveIndexDai;
-        int128 curveIndexOtherToken = poolWinders[_userIlk()].curveIndexOtherToken;
-        IERC20 otherToken = poolWinders[_userIlk()].otherToken;
+        bytes32 callerIlk = userIlks[usr];
+
+        CurveSwapLike curve = poolWinders[callerIlk].curve;
+        int128 curveIndexDai = poolWinders[callerIlk].curveIndexDai;
+        int128 curveIndexOtherToken = poolWinders[callerIlk].curveIndexOtherToken;
+        IERC20 otherToken = poolWinders[callerIlk].otherToken;
         
         // Pay back all CDP debt and exit g-uni
         _payBackDebtAndExitGuni(usr, amount);
@@ -418,13 +434,15 @@ contract GuniLev is Proxiable, Initializable, IERC3156FlashBorrower {
 
     /// @dev Separated to escape the 'stack too deep' error
     function _payBackDebtAndExitGuni(address usr, uint256 amount) internal {
-        GUNITokenLike guni = poolWinders[_userIlk()].guni;
-        GemJoinLike join = poolWinders[_userIlk()].join;
+        bytes32 callerIlk = userIlks[usr];
 
-        (uint256 ink, uint256 art) = vat.urns(_userIlk(), usr);
+        GUNITokenLike guni = poolWinders[callerIlk].guni;
+        GemJoinLike join = poolWinders[callerIlk].join;
+
+        (uint256 ink, uint256 art) = vat.urns(callerIlk, usr);
         dai.approve(address(daiJoin), amount);
         daiJoin.join(address(this), amount);
-        vat.frob(_userIlk(), address(usr), address(this), address(this), -int256(ink), -int256(art));
+        vat.frob(callerIlk, address(usr), address(this), address(this), -int256(ink), -int256(art));
         join.exit(address(this), ink);
 
         // Burn G-UNI
