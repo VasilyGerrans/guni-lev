@@ -1,3 +1,5 @@
+# Original
+
 Easy leverage for G-UNI contract: https://etherscan.io/address/0x0388c96bbd7c7a9cb128386c90987af526db85d7#writeContract
 
 Steps are:
@@ -10,3 +12,9 @@ Steps are:
 ```
 
 MIN_AMOUNT_EXPECTED_IN_WALLET_AFTER_TX can be gathered by querying getWindEstimates(). Use the first value returned and set it slightly below that value to deal with Curve slippage. You will need at least AMOUNT of Dai in your wallet. Use this at your own risk.
+
+# This Repo
+
+This fork of the original repo has two add-ons: it is upgradable via proxy, and it allows for adding and removing new G-UNI tokens to the wind/unwind operation if and when Maker allows using it as collateral. 
+
+The steps of the financial operations are the same as in the original contract.
